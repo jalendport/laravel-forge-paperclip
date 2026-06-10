@@ -1,0 +1,86 @@
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: paperclip_db
+    restart: always
+    networks:
+      - default
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: paperclip
+      POSTGRES_DB: paperclip
+      # Set once in .env BEFORE the first deploy. Changing it after the volume
+      # is initialized breaks authentication until the volume is reset.
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paperclip -d paperclip"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  paperclip:
+    # Pinned to an exact build for reproducible deploys. Paperclip only
+    # publishes `latest` and `sha-<commit>` tags — there is no semver image tag.
+    # Upgrade = bump this sha (see README "Upgrading Paperclip"), commit, deploy.
+    # sha-911a1e8 == release v2026.529.0.
+    image: ghcr.io/paperclipai/paperclip:sha-911a1e8
+    container_name: paperclip
+    restart: always
+    networks:
+      - default
+    depends_on:
+      db:
+        condition: service_healthy
+    # Forge writes .env in the site root; this loads every key into the
+    # container so you can add new Paperclip vars without editing this file.
+    env_file:
+      - .env
+    environment:
+      # Wire the app to the dedicated Postgres container (overrides the image's
+      # embedded-Postgres default).
+      DATABASE_URL: "postgres://paperclip:${POSTGRES_PASSWORD}@db:5432/paperclip"
+      PAPERCLIP_HOME: "/paperclip"
+      HOST: "0.0.0.0"
+      PORT: "3100"
+      SERVE_UI: "true"
+      # Authenticated + private (Tailscale) posture. Strict secrets mode keeps
+      # *_API_KEY / *_TOKEN values as encrypted secret refs, not inline env.
+      PAPERCLIP_DEPLOYMENT_MODE: "${PAPERCLIP_DEPLOYMENT_MODE:-authenticated}"
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: "${PAPERCLIP_DEPLOYMENT_EXPOSURE:-private}"
+      PAPERCLIP_SECRETS_STRICT_MODE: "${PAPERCLIP_SECRETS_STRICT_MODE:-true}"
+      # Your server's Tailscale MagicDNS URL (https). Required.
+      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:?PAPERCLIP_PUBLIC_URL must be set}"
+      # Required secrets — see README "Generate the secrets".
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
+      PAPERCLIP_SECRETS_MASTER_KEY: "${PAPERCLIP_SECRETS_MASTER_KEY:?PAPERCLIP_SECRETS_MASTER_KEY must be set}"
+    volumes:
+      - paperclip-data:/paperclip
+    # Bound to loopback only. `tailscale serve` (set up in deploy.sh) terminates
+    # TLS and proxies the tailnet to this port. Nothing is published publicly.
+    ports:
+      - "127.0.0.1:3100:3100"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 -O - http://127.0.0.1:3100/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 2m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  pgdata:
+  paperclip-data:
+
+networks:
+  default:

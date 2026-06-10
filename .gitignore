@@ -1,0 +1,9 @@
+# Secrets and local overrides — never commit these.
+.env
+compose.override.yml
+
+# Backups (keep the dirs, ignore their contents).
+/backups/db/*
+!/backups/db/.gitkeep
+/backups/data/*
+!/backups/data/.gitkeep
