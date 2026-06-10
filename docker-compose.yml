@@ -55,8 +55,14 @@ services:
       PAPERCLIP_DEPLOYMENT_MODE: "${PAPERCLIP_DEPLOYMENT_MODE:-authenticated}"
       PAPERCLIP_DEPLOYMENT_EXPOSURE: "${PAPERCLIP_DEPLOYMENT_EXPOSURE:-private}"
       PAPERCLIP_SECRETS_STRICT_MODE: "${PAPERCLIP_SECRETS_STRICT_MODE:-true}"
-      # Your server's Tailscale MagicDNS URL (https). Required.
+      # Your server's Tailscale MagicDNS URL (https) — how HUMANS reach the UI.
       PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:?PAPERCLIP_PUBLIC_URL must be set}"
+      # How AGENTS reach the API. Local-adapter agents run INSIDE this container,
+      # which is NOT a tailnet node — so they must call the API over loopback,
+      # not via the public *.ts.net URL (that name resolves but has no route from
+      # the container, causing "DNS resolves but TCP times out"). Override only
+      # if you run agents remotely (sandbox/SSH) on a tailnet-reachable host.
+      PAPERCLIP_API_URL: "${PAPERCLIP_API_URL:-http://127.0.0.1:3100}"
       # Required secrets — see README "Generate the secrets".
       BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
       PAPERCLIP_SECRETS_MASTER_KEY: "${PAPERCLIP_SECRETS_MASTER_KEY:?PAPERCLIP_SECRETS_MASTER_KEY must be set}"

@@ -229,6 +229,7 @@ Full reference: Paperclip's [environment variables](https://github.com/paperclip
 | `PAPERCLIP_DEPLOYMENT_EXPOSURE` | `private` | Private (Tailscale/LAN/VPN) exposure. |
 | `PAPERCLIP_SECRETS_STRICT_MODE` | `true` | Force `*_API_KEY` / `*_TOKEN` to use encrypted secret refs. |
 | `DATABASE_URL` | (wired in compose) | Points at the bundled `db` service; override only for external Postgres. |
+| `PAPERCLIP_API_URL` | `http://127.0.0.1:3100` | How in-container agents reach the API (loopback). **Not** the public URL — the container isn't a tailnet node. Override only for remote/sandboxed agents on a tailnet-reachable host. |
 
 Provider keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, …) are **not** environment variables here — add them in the Secrets UI ([Step 6](#step-6--add-your-llm-provider-keys)).
 
@@ -285,6 +286,8 @@ Also confirm `tailscaled` is running and the node is up (`tailscale status`), an
 **Deploy succeeds but data is gone after a redeploy.** **Zero-downtime deployments are enabled** — turn them off ([Step 2](#step-2--create-the-site-and-connect-your-fork)). They rename the Compose project each deploy and orphan your volumes. Your old volumes may still exist under the previous project name (`docker volume ls`); recover them before they're pruned.
 
 **Agents fail with auth/credential errors.** The provider key isn't bound. Add it as a secret and bind it to the agent ([Step 6](#step-6--add-your-llm-provider-keys)). Note Gemini API keys must be *restricted to the Gemini API* in Google Cloud, or `gemini_local` runs are rejected.
+
+**Agent blocked: "Tailscale connectivity failure — `<host>.ts.net` unreachable (DNS resolves but TCP times out)."** The agent is trying to reach the Paperclip API at the public `*.ts.net` URL, but it runs *inside* the container, which isn't a tailnet node — so it has no route to the tailnet IP. Agents must call the API over loopback. This stack sets `PAPERCLIP_API_URL=http://127.0.0.1:3100` for exactly this reason; if you see this error, confirm that value is in effect (`docker compose exec paperclip printenv PAPERCLIP_API_URL`) and redeploy. (This applies to in-container local adapters; remote/sandboxed agents would instead need a tailnet-reachable API URL.)
 
 ## License
 
