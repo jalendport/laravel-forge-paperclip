@@ -74,7 +74,7 @@ A Forge "site" gives you Git-based deployment.
 
    Forge pulls the latest code first, then runs the repo's tracked [`deploy.sh`](deploy.sh).
 
-> **Sudo for `tailscale serve`.** `deploy.sh` runs `sudo tailscale serve …` to publish the app over your tailnet. Forge's `forge` user has passwordless sudo, so this works out of the box. If you'd rather avoid sudo, set the Tailscale operator once: `sudo tailscale set --operator=forge` (the companion repo can do this for you).
+> **No sudo needed for `tailscale serve`.** Forge runs the deploy script with no TTY, so it can't answer an interactive `sudo` password prompt. That's why the Install Tailscale recipe sets the Tailscale **operator** to `forge` — it lets the deploy user run `tailscale serve` directly, without sudo. `deploy.sh` uses that path (and falls back to non-interactive `sudo -n` only if the operator isn't set but the deploy user happens to have passwordless sudo). If you installed Tailscale some other way, run `sudo tailscale set --operator=$(whoami)` once over SSH so deploys can manage the serve mapping.
 
 ## Step 3 — Configure the environment
 
@@ -271,7 +271,16 @@ docker compose exec paperclip paperclipai allowed-hostname my-server.tailnet-nam
 
 **`paperclip` container is `unhealthy`.** Check `docker compose logs paperclip`. Usually it can't reach Postgres (wait for `db` to be healthy first) or a required env var is missing — the `:?` guards in `docker-compose.yml` fail the deploy loudly if `PAPERCLIP_PUBLIC_URL`, `BETTER_AUTH_SECRET`, `PAPERCLIP_SECRETS_MASTER_KEY`, or `POSTGRES_PASSWORD` is unset.
 
-**`tailscale serve` failed during deploy.** The Docker stack still came up (the script warns rather than fails). Fix Tailscale on the host (is `tailscaled` running? is the node up? does `forge` have sudo or the operator bit?), then re-run the deploy or the `tailscale serve` command from Step 4.
+**`tailscale serve` failed during deploy** (e.g. `sudo: a password is required`). The Docker stack still came up (the script warns rather than fails); only the tailnet mapping is missing. The deploy user needs to run `tailscale serve` **without** sudo, which requires the Tailscale operator bit. Fix it once over SSH, then re-deploy:
+
+```bash
+sudo tailscale set --operator=$(whoami)     # one-time; the install-tailscale recipe also does this
+# map it immediately without waiting for a redeploy:
+tailscale serve --bg --https=443 http://127.0.0.1:3100
+tailscale serve status                       # confirm https://<server>.<tailnet>.ts.net -> 127.0.0.1:3100
+```
+
+Also confirm `tailscaled` is running and the node is up (`tailscale status`), and that MagicDNS + HTTPS Certificates are enabled in the admin console (otherwise serve can't get a cert).
 
 **Deploy succeeds but data is gone after a redeploy.** **Zero-downtime deployments are enabled** — turn them off ([Step 2](#step-2--create-the-site-and-connect-your-fork)). They rename the Compose project each deploy and orphan your volumes. Your old volumes may still exist under the previous project name (`docker volume ls`); recover them before they're pruned.
 

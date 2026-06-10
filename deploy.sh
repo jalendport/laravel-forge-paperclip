@@ -47,8 +47,23 @@ docker compose up -d --remove-orphans
 # tailnet until Tailscale is set up.
 if command -v tailscale &> /dev/null; then
     echo "Ensuring 'tailscale serve' maps :443 -> 127.0.0.1:3100..."
-    if ! sudo tailscale serve --bg --https=443 http://127.0.0.1:3100; then
-        echo "WARNING: 'tailscale serve' failed. Configure it manually (see README)." >&2
+    # The install-tailscale recipe sets operator=forge, so the deploy user can
+    # run `tailscale serve` WITHOUT sudo — Forge runs this script with no TTY,
+    # so an interactive `sudo` password prompt can't be answered here. We try
+    # the operator (no-sudo) path first, then fall back to non-interactive sudo
+    # (`-n`, so it fails fast instead of hanging) for hosts where the operator
+    # isn't set but the deploy user has passwordless sudo.
+    SERVE_ARGS=(serve --bg --https=443 http://127.0.0.1:3100)
+    if tailscale "${SERVE_ARGS[@]}" 2>/dev/null; then
+        echo "  mapped (via Tailscale operator)."
+    elif sudo -n tailscale "${SERVE_ARGS[@]}" 2>/dev/null; then
+        echo "  mapped (via passwordless sudo)."
+    else
+        echo "WARNING: couldn't configure 'tailscale serve' automatically." >&2
+        echo "         Make the deploy user the Tailscale operator — the install-tailscale" >&2
+        echo "         recipe does this — or run this once over SSH, then re-deploy:" >&2
+        echo "           sudo tailscale set --operator=\$(whoami)" >&2
+        echo "         (If certs fail instead, enable MagicDNS + HTTPS in the admin console.)" >&2
     fi
 else
     echo "WARNING: tailscale not found on PATH. Paperclip is up on 127.0.0.1:3100" >&2
