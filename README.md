@@ -19,6 +19,7 @@ Fork it, point Forge at your fork, fill in a `.env`, and deploy — no nginx con
 - [Backups](#backups)
 - [Restoring from a backup](#restoring-from-a-backup)
 - [Upgrading Paperclip](#upgrading-paperclip)
+- [Database tuning](#database-tuning)
 - [Configuration reference](#configuration-reference)
 - [Security notes](#security-notes)
 - [Makefile shortcuts](#makefile-shortcuts)
@@ -214,6 +215,68 @@ The image is pinned to an exact `sha-<commit>` in [`docker-compose.yml`](docker-
 Both volumes persist across upgrades, so your data is untouched. Read the [Paperclip changelog / releases](https://github.com/paperclipai/paperclip/releases) before a big jump.
 
 > **PostgreSQL major upgrades** (e.g. `postgres:17` → a future `:18`) are *not* automatic and require a dump/restore. This repo pins Postgres 17; don't bump it casually — `make backup-db`, then restore into the new major version.
+
+## Database tuning
+
+Stock `postgres:17-alpine` ships fixed, conservative defaults no matter how big the server is — `shared_buffers` 128MB, `work_mem` 4MB, `effective_cache_size` 4GB. On a real Forge box that badly under-uses memory and CPU (a 15GB / 8-vCPU server would still cache only 128MB). So the `db` service **auto-tunes Postgres to the box at startup**: [`scripts/pg-autotune.sh`](scripts/pg-autotune.sh) reads the memory and CPU available to the container, computes the key settings, and starts Postgres with them. There is **nothing to configure** — it scales from a 1GB box to a 128GB box with no per-server editing.
+
+### How it works
+
+- The script is mounted into the `db` container and set as its `entrypoint` in [`docker-compose.yml`](docker-compose.yml). It computes `-c key=value` flags, then execs the Postgres image's own `docker-entrypoint.sh postgres …`, so first-boot `initdb`, the `pgdata` volume, and the healthcheck are all unchanged. **It only adds runtime config — it never touches or migrates data**, and a redeploy recreates only the `db` container.
+- **Resources are read cgroup-aware.** Memory comes from the cgroup v2 limit (`/sys/fs/cgroup/memory.max`), falling back to the cgroup v1 limit, then to the host's `/proc/meminfo` `MemTotal`. CPU comes from the cgroup CPU quota (`/sys/fs/cgroup/cpu.max`), falling back to `nproc`. **If you set no `mem_limit` / `cpus` on the `db` service, the container sees the full host** — which is the default here. To cap what the tuner sizes against, either set `mem_limit`/`cpus` on the service or use the `PG_TUNE_TOTAL_*` overrides below (handy for leaving RAM for the app container, which shares the host).
+- **Sizing follows the PGTune "Web / OLTP" profile** ([pgtune.leopard.in.ua](https://pgtune.leopard.in.ua)), adapted for Paperclip. Per the official Paperclip database docs ([mintlify](https://paperclipai-paperclip.mintlify.app/deployment/database), [GitHub](https://github.com/paperclipai/paperclip/blob/master/docs/deploy/database.md)), Paperclip uses only **1–2 connections per server instance** and scales via **connection pooling**, not a high connection count — so the tuner leaves `max_connections` at the Postgres default (100) and tunes memory/parallelism instead.
+- **`/dev/shm` is sized for parallel queries.** Docker caps `/dev/shm` at 64MB by default, which makes Postgres parallel workers fail with *"could not resize shared memory segment"*. The service sets `shm_size` (default `1g`, override `POSTGRES_SHM_SIZE`) so parallel queries work out of the box.
+
+### What it computes
+
+All values scale from detected RAM/CPU; no absolute tuning value is hardcoded. Floors keep tiny boxes booting; caps stop very large boxes over-reserving.
+
+| Parameter | Rule (default) |
+|---|---|
+| `shared_buffers` | ~25% of RAM, floor 128MB, cap 16GB |
+| `effective_cache_size` | ~75% of RAM (planner hint, not an allocation) |
+| `maintenance_work_mem` | RAM/16, cap 2GB |
+| `autovacuum_work_mem` | tracks `maintenance_work_mem`, cap 256MB (bounds 3 autovacuum workers) |
+| `work_mem` | derived from free RAM ÷ `max_connections` ÷ parallelism, floor 4MB (deliberately conservative — it multiplies across sorts/hashes) |
+| `max_worker_processes`, `max_parallel_workers` | CPU count (never below the stock default of 8) |
+| `max_parallel_workers_per_gather`, `max_parallel_maintenance_workers` | ~half the CPUs, cap 4 |
+| `random_page_cost` | `1.1` (SSD-oriented; Forge servers are SSD-backed) |
+| `effective_io_concurrency` | `200` (SSD-oriented) |
+| `min_wal_size` / `max_wal_size` | RAM-aware: `max_wal_size` ≈ RAM/4 (floor 512MB, cap 8GB), `min_wal_size` ≈ a quarter of that |
+| `checkpoint_completion_target` | `0.9` |
+| `max_connections` | **left at the Postgres default (100)** unless you override it |
+
+### Overrides
+
+Every parameter is individually overridable by an environment variable — an explicit override always wins and the computed value is not applied, so you can pin any value (or bypass auto-tuning entirely) with no code changes. They're listed, commented out, in [`example.env`](example.env). The direct parameter overrides (`PG_SHARED_BUFFERS`, `PG_WORK_MEM`, `PG_EFFECTIVE_IO_CONCURRENCY`, `PG_MAX_CONNECTIONS`, …) take Postgres values/units verbatim; the `PG_TUNE_*` knobs reshape the formulas (fractions, floors, caps) and the detected totals; `PG_TUNE_DISABLE=1` starts Postgres with stock image defaults.
+
+### Verify it
+
+Preview the values the tuner would apply (without starting the database):
+
+```bash
+docker compose run --rm -e PG_TUNE_PRINT_ONLY=1 db
+```
+
+After a deploy, confirm what Postgres actually loaded:
+
+```bash
+docker compose exec db psql -U paperclip -d paperclip -c "SHOW shared_buffers;"
+docker compose exec db psql -U paperclip -d paperclip -c "SHOW effective_cache_size;"
+docker compose exec db psql -U paperclip -d paperclip -c "SHOW work_mem;"
+docker compose logs db | grep pg-autotune        # the computed summary at startup
+```
+
+Confirm parallel queries work (no "could not resize shared memory segment"):
+
+```bash
+docker compose exec db psql -U paperclip -d paperclip -c \
+  "SET max_parallel_workers_per_gather = 4; SET debug_parallel_query = on; EXPLAIN ANALYZE SELECT count(*) FROM generate_series(1, 5000000);"
+```
+
+(`debug_parallel_query` is Postgres 16+'s replacement for the old `force_parallel_mode`.)
+
+To see the tuning scale, run the same image with two different memory limits and compare — e.g. `docker run --rm --memory 2g …` vs `--memory 12g …`, or set `PG_TUNE_TOTAL_MEM_MB` — then `SHOW shared_buffers;` in each.
 
 ## Configuration reference
 
