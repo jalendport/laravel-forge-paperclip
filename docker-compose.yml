@@ -29,8 +29,8 @@ services:
     # Pinned to an exact build for reproducible deploys. Paperclip only
     # publishes `latest` and `sha-<commit>` tags — there is no semver image tag.
     # Upgrade = bump this sha (see README "Upgrading Paperclip"), commit, deploy.
-    # sha-911a1e8 == release v2026.529.0.
-    image: ghcr.io/paperclipai/paperclip:sha-911a1e8
+    # sha-a0f7d3d == release v2026.609.0.
+    image: ghcr.io/paperclipai/paperclip:sha-a0f7d3d
     container_name: paperclip
     restart: always
     networks:

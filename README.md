@@ -200,7 +200,7 @@ The PostgreSQL restore uses `ON_ERROR_STOP=1`, so a corrupt or partial dump fail
 The image is pinned to an exact `sha-<commit>` in [`docker-compose.yml`](docker-compose.yml), so upgrades are deliberate. Paperclip publishes no semver image tag — you pin to a commit sha.
 
 1. **Back up first** — `make backup` (or wait for a scheduled run).
-2. Find the sha you want to move to. Each commit on [`paperclipai/paperclip`](https://github.com/paperclipai/paperclip) is published as `sha-<short-commit>`. To track a tagged release, look up that release's commit and use its short sha — for example release `v2026.529.0` is commit `911a1e8`, i.e. `sha-911a1e8` (the current pin). You can list published tags from the registry:
+2. Find the sha you want to move to. Each commit on [`paperclipai/paperclip`](https://github.com/paperclipai/paperclip) is published as `sha-<short-commit>`. To track a tagged release, look up that release's commit and use its short sha — for example release `v2026.609.0` is commit `a0f7d3d`, i.e. `sha-a0f7d3d` (the current pin). You can list published tags from the registry:
 
    ```bash
    token=$(curl -fsSL "https://ghcr.io/token?scope=repository:paperclipai/paperclip:pull&service=ghcr.io" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
