@@ -7,6 +7,21 @@ services:
       - default
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # Size-adaptive tuning wrapper (see `entrypoint` below). Mounted read-only
+      # so the pinned image stays untouched — no custom build.
+      - ./scripts/pg-autotune.sh:/usr/local/bin/pg-autotune.sh:ro
+    # Auto-tune Postgres to the box at startup. The wrapper reads the memory/CPU
+    # available to the container (cgroup limit when set, host total otherwise),
+    # computes shared_buffers/effective_cache_size/work_mem/parallelism/etc, and
+    # execs the image's own `docker-entrypoint.sh postgres -c …`, so first-boot
+    # initdb, the pgdata volume, and the healthcheck below are unchanged. Every
+    # value is env-overridable (PG_*) and no absolute tuning value is hardcoded.
+    # See README "Database tuning". Preview without starting: add PG_TUNE_PRINT_ONLY=1.
+    entrypoint: ["sh", "/usr/local/bin/pg-autotune.sh"]
+    # Docker caps /dev/shm at 64MB by default; Postgres parallel workers put
+    # dynamic shared memory there and fail with "could not resize shared memory
+    # segment". Give DSM real headroom (overridable).
+    shm_size: "${POSTGRES_SHM_SIZE:-1g}"
     environment:
       POSTGRES_USER: paperclip
       POSTGRES_DB: paperclip
